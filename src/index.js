@@ -1,4 +1,4 @@
-import { PDFDocument, rgb } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 
 const allowedOrigins = ['https://diuqbank.live', 'https://diuquestionbank.com'];
 
@@ -37,28 +37,37 @@ async function handleRequest(event) {
 				const pages = pdfDoc.getPages();
 				const { width, height } = pages[0].getSize();
 
+				// Add text to pages
 				for (const page of pages) {
 					page.drawText('For more questions:', {
 						x: 10,
 						y: height - 15,
 						size: 12,
 						color: rgb(0, 0, 0),
+						font: await pdfDoc.embedFont(StandardFonts.Helvetica),
 					});
 					page.drawText('https://diuquestionbank.com' + extra, {
 						x: 120,
 						y: height - 15,
 						size: 12,
 						color: rgb(0, 0, 0),
+						font: await pdfDoc.embedFont(StandardFonts.Helvetica),
 					});
 				}
 
-				const pdfBytesModified = await pdfDoc.save();
+				// Save PDF with compression
+				const compressedPdfBytes = await pdfDoc.save({
+					useObjectStreams: false,  // Important for enabling fast web view
+					updateFieldAppearances: true,
+					compress: true
+				});
 
-				response = new Response(pdfBytesModified, {
+				response = new Response(compressedPdfBytes, {
 					headers: {
 						'Content-Type': 'application/pdf',
 						'Content-Disposition': `inline; filename="${fileName}"`,
 						'Cache-Control': 'public, max-age=86400', // 1 day client-side cache
+						'Accept-Ranges': 'bytes', // Enable byte-range requests
 					},
 				});
 
@@ -73,12 +82,7 @@ async function handleRequest(event) {
 			}
 
 			// Add CORS headers
-			// const origin = request.headers.get('Origin');
-			// if (allowedOrigins.includes(origin)) {
-			// 	response.headers.set('Access-Control-Allow-Origin', origin);
-			// }
 			response.headers.set('Access-Control-Allow-Origin', '*');
-
 			response.headers.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
 			response.headers.set('Access-Control-Allow-Headers', 'Content-Type');
 
@@ -87,5 +91,30 @@ async function handleRequest(event) {
 		}
 	}
 
+	// Handle byte-range requests for partial content
+	if (request.headers.has('range')) {
+		return handleRangeRequest(request, response);
+	}
+
 	return response;
+}
+
+function handleRangeRequest(request, originalResponse) {
+	const range = request.headers.get('range');
+	const total = originalResponse.headers.get('content-length');
+	const parts = range.replace(/bytes=/, "").split("-");
+	const start = parseInt(parts[0], 10);
+	const end = parts[1] ? parseInt(parts[1], 10) : total - 1;
+	const chunk = originalResponse.body.slice(start, end + 1);
+
+	return new Response(chunk, {
+		status: 206,
+		statusText: 'Partial Content',
+		headers: {
+			'Content-Range': `bytes ${start}-${end}/${total}`,
+			'Accept-Ranges': 'bytes',
+			'Content-Length': chunk.length,
+			'Content-Type': 'application/pdf',
+		}
+	});
 }
